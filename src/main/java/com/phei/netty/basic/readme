@@ -1,0 +1,29 @@
+https://segmentfault.com/a/1190000007403937
+https://www.jianshu.com/u/dbcfb30ec5e4?utm_campaign=maleskine&utm_content=user&utm_medium=seo_notes&utm_source=recommendation
+http://blog.csdn.net/u012562943/article/details/53256561
+
+Thread [nioEventLoopGroup-2-1] (Suspended)	
+	ChannelHandlerInvokerUtil.invokeReadNow(ChannelHandlerContext) line: 132	
+	DefaultChannelHandlerInvoker.invokeRead(ChannelHandlerContext) line: 263	
+	DefaultChannelHandlerContext.read() line: 403	
+	DefaultChannelPipeline.read() line: 923	
+	NioServerSocketChannel(AbstractChannel).read() line: 214	
+	DefaultChannelPipeline.fireChannelActive() line: 819	
+	AbstractChannel$AbstractUnsafe$2.run() line: 474	
+	NioEventLoop(SingleThreadEventExecutor).runAllTasks(long) line: 318	
+	NioEventLoop.run() line: 353	
+	SingleThreadEventExecutor$5.run() line: 794	
+	Thread.run() line: 745 [local variables unavailable]
+	
+	
+上图可知netty执行顺序
+
+		
+NioServerSocketChannel   -- >  DefaultChannelPipeline  -->  DefaultChannelHandlerContext  --> DefaultChannelHandlerInvoker
+
+
+NioServerSocketChannel  和 DefaultChannelPipeline 对于业务处理线程来说是1对1关系
+
+
+
+																		
