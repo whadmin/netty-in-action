@@ -1,0 +1,61 @@
+public void read() {
+            //获取Channel配置信息
+            final ChannelConfig config = config();
+            //获取ChannelPipeline
+            final ChannelPipeline pipeline = pipeline();
+            //获取ByteBufAllocator(用来创建ByteBuf)
+            final ByteBufAllocator allocator = config.getAllocator();
+            final int maxMessagesPerRead = config.getMaxMessagesPerRead();
+            RecvByteBufAllocator.Handle allocHandle = this.allocHandle;
+            if (allocHandle == null) {
+                this.allocHandle = allocHandle = config.getRecvByteBufAllocator().newHandle();
+            }
+            if (!config.isAutoRead()) {
+                removeReadOp();
+            }
+
+            ByteBuf byteBuf = null;
+            int messages = 0;
+            boolean close = false;
+            try {
+                int byteBufCapacity = allocHandle.guess();
+                int totalReadAmount = 0;
+                do {
+                    byteBuf = allocator.ioBuffer(byteBufCapacity);
+                    int writable = byteBuf.writableBytes();
+                    int localReadAmount = doReadBytes(byteBuf);
+                    if (localReadAmount <= 0) {
+                        // not was read release the buffer
+                        byteBuf.release();
+                        close = localReadAmount < 0;
+                        break;
+                    }
+
+                    pipeline.fireChannelRead(byteBuf);
+                    byteBuf = null;
+
+                    if (totalReadAmount >= Integer.MAX_VALUE - localReadAmount) {
+                        // Avoid overflow.
+                        totalReadAmount = Integer.MAX_VALUE;
+                        break;
+                    }
+
+                    totalReadAmount += localReadAmount;
+                    if (localReadAmount < writable) {
+                        // Read less than what the buffer can hold,
+                        // which might mean we drained the recv buffer completely.
+                        break;
+                    }
+                } while (++ messages < maxMessagesPerRead);
+
+                pipeline.fireChannelReadComplete();
+                allocHandle.record(totalReadAmount);
+
+                if (close) {
+                    closeOnRead(pipeline);
+                    close = false;
+                }
+            } catch (Throwable t) {
+                handleReadException(pipeline, byteBuf, t, close);
+            }
+        }

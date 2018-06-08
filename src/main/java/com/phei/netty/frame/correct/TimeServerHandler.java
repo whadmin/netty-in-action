@@ -38,6 +38,11 @@ public class TimeServerHandler extends ChannelHandlerAdapter {
         ByteBuf resp = Unpooled.copiedBuffer(currentTime.getBytes());
         ctx.writeAndFlush(resp);
     }
+    
+    
+    public void channelReadComplete(ChannelHandlerContext ctx){
+    	System.out.println("channelReadComplete");
+    }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {

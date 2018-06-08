@@ -1,3 +1,4 @@
+package com.netty.learning;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
@@ -24,7 +25,7 @@ import io.netty.util.concurrent.Promise;
  *  wang 委托给li一个统计计算任务，并告知li完成后把结果填入A（传参promise）
  *  wang 不断查看A 看是否有结果 promise.await()
  */
-public class PromiseTest {
+public class PromiseMain {
 
     public static void main(String[] args) throws Exception {
         // isSuccessTest();
