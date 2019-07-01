@@ -689,6 +689,7 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
     /**
      * 从WorkQueue获取任务
      * 同时用来判断work何时退出销毁
+     *
      */
     private Runnable getTask() {
         boolean timedOut = false; // Did the last poll() time out?
