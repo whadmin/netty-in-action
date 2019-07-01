@@ -206,7 +206,7 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
 
 
     /**
-     * 线程池中允许的最大work线程数
+     * 线程池中允许的最大work数量
      */
     private volatile int maximumPoolSize;
 
@@ -238,7 +238,7 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
         final Thread thread;
         /** 初始化Worker，分配的第一个任务 */
         Runnable firstTask;
-        /** Per-thread task counter */
+        /** 每个work执行的任务数量 */
         volatile long completedTasks;
 
         /**
@@ -616,6 +616,7 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
                 }
                 /** 创建成功，启动work执行任务 **/
                 if (workerAdded) {
+                    /** 启动work **/
                     t.start();
                     workerStarted = true;
                 }
@@ -691,21 +692,7 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
     }
 
     /**
-     * Performs blocking or timed wait for a task, depending on
-     * current configuration settings, or returns null if this worker
-     * must exit because of any of:
-     * 1. There are more than maximumPoolSize workers (due to
-     *    a call to setMaximumPoolSize).
-     * 2. The pool is stopped.
-     * 3. The pool is shutdown and the queue is empty.
-     * 4. This worker timed out waiting for a task, and timed-out
-     *    workers are subject to termination (that is,
-     *    {@code allowCoreThreadTimeOut || workerCount > corePoolSize})
-     *    both before and after the timed wait, and if the queue is
-     *    non-empty, this worker is not the last thread in the pool.
-     *
-     * @return task, or null if the worker must exit, in which case
-     *         workerCount is decremented
+     * 从WorkQueue获取任务
      */
     private Runnable getTask() {
         boolean timedOut = false; // Did the last poll() time out?
@@ -745,71 +732,47 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
         }
     }
 
+
     /**
-     * Main worker run loop.  Repeatedly gets tasks from queue and
-     * executes them, while coping with a number of issues:
-     *
-     * 1. We may start out with an initial task, in which case we
-     * don't need to get the first one. Otherwise, as long as pool is
-     * running, we get tasks from getTask. If it returns null then the
-     * worker exits due to changed pool state or configuration
-     * parameters.  Other exits result from exception throws in
-     * external code, in which case completedAbruptly holds, which
-     * usually leads processWorkerExit to replace this thread.
-     *
-     * 2. Before running any task, the lock is acquired to prevent
-     * other pool interrupts while the task is executing, and then we
-     * ensure that unless pool is stopping, this thread does not have
-     * its interrupt set.
-     *
-     * 3. Each task run is preceded by a call to beforeExecute, which
-     * might throw an exception, in which case we cause thread to die
-     * (breaking loop with completedAbruptly true) without processing
-     * the task.
-     *
-     * 4. Assuming beforeExecute completes normally, we run the task,
-     * gathering any of its thrown exceptions to send to afterExecute.
-     * We separately handle RuntimeException, Error (both of which the
-     * specs guarantee that we trap) and arbitrary Throwables.
-     * Because we cannot rethrow Throwables within Runnable.run, we
-     * wrap them within Errors on the way out (to the thread's
-     * UncaughtExceptionHandler).  Any thrown exception also
-     * conservatively causes thread to die.
-     *
-     * 5. After task.run completes, we call afterExecute, which may
-     * also throw an exception, which will also cause thread to
-     * die. According to JLS Sec 14.20, this exception is the one that
-     * will be in effect even if task.run throws.
-     *
-     * The net effect of the exception mechanics is that afterExecute
-     * and the thread's UncaughtExceptionHandler have as accurate
-     * information as we can provide about any problems encountered by
-     * user code.
-     *
-     * @param w the worker
+     * work执行逻辑
+     * @param w
      */
     final void runWorker(Worker w) {
+        /** 获取当前线程 **/
         Thread wt = Thread.currentThread();
+        /** 获取执行任务**/
         Runnable task = w.firstTask;
+        /** 将任务从work清理**/
         w.firstTask = null;
+        /** 初始化同步状态为0(创建时为-1) **/
         w.unlock(); // allow interrupts
         boolean completedAbruptly = true;
         try {
+            /** 如果当前work中存在任务则执行，不存在则从WorkQueue获取任务 **/
             while (task != null || (task = getTask()) != null) {
+                /** 获取work独占同步状态 **/
                 w.lock();
-                // If pool is stopping, ensure thread is interrupted;
-                // if not, ensure thread is not interrupted.  This
-                // requires a recheck in second case to deal with
-                // shutdownNow race while clearing interrupt
+
+                /** 如果当前线程池的状态为STOP，将work中工作线程标记为中断
+                 * 1、如果线程池状态>=stop，且当前线程没有设置中断状态，wt.interrupt()
+                   2、如果一开始判断线程池状态<stop，但Thread.interrupted()为true，即线程已经被中断，又清除了中断标示，再次判断线程池状态是否>=stop
+                      是，再次设置中断标示，wt.interrupt()
+                 *    否，不做操作，清除中断标示后进行后续步骤
+                 *
+                 * **/
                 if ((runStateAtLeast(ctl.get(), STOP) ||
                         (Thread.interrupted() &&
                                 runStateAtLeast(ctl.get(), STOP))) &&
                         !wt.isInterrupted())
                     wt.interrupt();
+
+
                 try {
+                    /** 模板方法给子类扩展 **/
                     beforeExecute(wt, task);
                     Throwable thrown = null;
                     try {
+                        /** 处理任务 **/
                         task.run();
                     } catch (RuntimeException x) {
                         thrown = x; throw x;
@@ -818,11 +781,15 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
                     } catch (Throwable x) {
                         thrown = x; throw new Error(x);
                     } finally {
+                        /** 模板方法给子类扩展 **/
                         afterExecute(task, thrown);
                     }
                 } finally {
+                    /** 重置任务 **/
                     task = null;
+                    /** work执行的任务数量  **/
                     w.completedTasks++;
+                    /** 释放work独占同步状态 **/
                     w.unlock();
                 }
             }
@@ -832,31 +799,14 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
         }
     }
 
-    // Public constructors and methods
 
     /**
-     * Creates a new {@code ThreadPoolExecutor} with the given initial
-     * parameters and default thread factory and rejected execution handler.
-     * It may be more convenient to use one of the {@link Executors} factory
-     * methods instead of this general purpose constructor.
-     *
-     * @param corePoolSize the number of threads to keep in the pool, even
-     *        if they are idle, unless {@code allowCoreThreadTimeOut} is set
-     * @param maximumPoolSize the maximum number of threads to allow in the
-     *        pool
-     * @param keepAliveTime when the number of threads is greater than
-     *        the core, this is the maximum time that excess idle threads
-     *        will wait for new tasks before terminating.
-     * @param unit the time unit for the {@code keepAliveTime} argument
-     * @param workQueue the queue to use for holding tasks before they are
-     *        executed.  This queue will hold only the {@code Runnable}
-     *        tasks submitted by the {@code execute} method.
-     * @throws IllegalArgumentException if one of the following holds:<br>
-     *         {@code corePoolSize < 0}<br>
-     *         {@code keepAliveTime < 0}<br>
-     *         {@code maximumPoolSize <= 0}<br>
-     *         {@code maximumPoolSize < corePoolSize}
-     * @throws NullPointerException if {@code workQueue} is null
+     * 创建一个线程池,使用默认线程池的拒绝策略和创建work工厂
+     * @param corePoolSize 线程池中核心work线程的数量。
+     * @param maximumPoolSize 线程池中允许的最大work数量
+     * @param keepAliveTime work线程（非核心线程）空闲的时间，大于此时间是被销毁
+     * @param unit keepAliveTime的单位。TimeUnit
+     * @param workQueue 用来保存等待执行的任务的阻塞队列
      */
     public ThreadPoolExecutor(int corePoolSize,
                               int maximumPoolSize,
@@ -868,29 +818,13 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
     }
 
     /**
-     * Creates a new {@code ThreadPoolExecutor} with the given initial
-     * parameters and default rejected execution handler.
-     *
-     * @param corePoolSize the number of threads to keep in the pool, even
-     *        if they are idle, unless {@code allowCoreThreadTimeOut} is set
-     * @param maximumPoolSize the maximum number of threads to allow in the
-     *        pool
-     * @param keepAliveTime when the number of threads is greater than
-     *        the core, this is the maximum time that excess idle threads
-     *        will wait for new tasks before terminating.
-     * @param unit the time unit for the {@code keepAliveTime} argument
-     * @param workQueue the queue to use for holding tasks before they are
-     *        executed.  This queue will hold only the {@code Runnable}
-     *        tasks submitted by the {@code execute} method.
-     * @param threadFactory the factory to use when the executor
-     *        creates a new thread
-     * @throws IllegalArgumentException if one of the following holds:<br>
-     *         {@code corePoolSize < 0}<br>
-     *         {@code keepAliveTime < 0}<br>
-     *         {@code maximumPoolSize <= 0}<br>
-     *         {@code maximumPoolSize < corePoolSize}
-     * @throws NullPointerException if {@code workQueue}
-     *         or {@code threadFactory} is null
+     * 创建一个线程池,使用默认线程池的拒绝策略
+     * @param corePoolSize 线程池中核心work线程的数量。
+     * @param maximumPoolSize 线程池中允许的最大work数量
+     * @param keepAliveTime work线程（非核心线程）空闲的时间，大于此时间是被销毁
+     * @param unit keepAliveTime的单位。TimeUnit
+     * @param workQueue 用来保存等待执行的任务的阻塞队列
+     * @param threadFactory 创建work工厂
      */
     public ThreadPoolExecutor(int corePoolSize,
                               int maximumPoolSize,
@@ -903,29 +837,13 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
     }
 
     /**
-     * Creates a new {@code ThreadPoolExecutor} with the given initial
-     * parameters and default thread factory.
-     *
-     * @param corePoolSize the number of threads to keep in the pool, even
-     *        if they are idle, unless {@code allowCoreThreadTimeOut} is set
-     * @param maximumPoolSize the maximum number of threads to allow in the
-     *        pool
-     * @param keepAliveTime when the number of threads is greater than
-     *        the core, this is the maximum time that excess idle threads
-     *        will wait for new tasks before terminating.
-     * @param unit the time unit for the {@code keepAliveTime} argument
-     * @param workQueue the queue to use for holding tasks before they are
-     *        executed.  This queue will hold only the {@code Runnable}
-     *        tasks submitted by the {@code execute} method.
-     * @param handler the handler to use when execution is blocked
-     *        because the thread bounds and queue capacities are reached
-     * @throws IllegalArgumentException if one of the following holds:<br>
-     *         {@code corePoolSize < 0}<br>
-     *         {@code keepAliveTime < 0}<br>
-     *         {@code maximumPoolSize <= 0}<br>
-     *         {@code maximumPoolSize < corePoolSize}
-     * @throws NullPointerException if {@code workQueue}
-     *         or {@code handler} is null
+     * 创建一个线程池,使用默认的创建work工厂
+     * @param corePoolSize 线程池中核心work线程的数量。
+     * @param maximumPoolSize 线程池中允许的最大work数量
+     * @param keepAliveTime work线程（非核心线程）空闲的时间，大于此时间是被销毁
+     * @param unit keepAliveTime的单位。TimeUnit
+     * @param workQueue 用来保存等待执行的任务的阻塞队列
+     * @param handler 线程池的拒绝策略
      */
     public ThreadPoolExecutor(int corePoolSize,
                               int maximumPoolSize,
@@ -938,31 +856,14 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
     }
 
     /**
-     * Creates a new {@code ThreadPoolExecutor} with the given initial
-     * parameters.
-     *
-     * @param corePoolSize the number of threads to keep in the pool, even
-     *        if they are idle, unless {@code allowCoreThreadTimeOut} is set
-     * @param maximumPoolSize the maximum number of threads to allow in the
-     *        pool
-     * @param keepAliveTime when the number of threads is greater than
-     *        the core, this is the maximum time that excess idle threads
-     *        will wait for new tasks before terminating.
-     * @param unit the time unit for the {@code keepAliveTime} argument
-     * @param workQueue the queue to use for holding tasks before they are
-     *        executed.  This queue will hold only the {@code Runnable}
-     *        tasks submitted by the {@code execute} method.
-     * @param threadFactory the factory to use when the executor
-     *        creates a new thread
-     * @param handler the handler to use when execution is blocked
-     *        because the thread bounds and queue capacities are reached
-     * @throws IllegalArgumentException if one of the following holds:<br>
-     *         {@code corePoolSize < 0}<br>
-     *         {@code keepAliveTime < 0}<br>
-     *         {@code maximumPoolSize <= 0}<br>
-     *         {@code maximumPoolSize < corePoolSize}
-     * @throws NullPointerException if {@code workQueue}
-     *         or {@code threadFactory} or {@code handler} is null
+     * 创建一个线程池，
+     * @param corePoolSize 线程池中核心work线程的数量。
+     * @param maximumPoolSize 线程池中允许的最大work数量
+     * @param keepAliveTime work线程（非核心线程）空闲的时间，大于此时间是被销毁
+     * @param unit keepAliveTime的单位。TimeUnit
+     * @param workQueue 用来保存等待执行的任务的阻塞队列
+     * @param threadFactory 创建work工厂
+     * @param handler 线程池的拒绝策略
      */
     public ThreadPoolExecutor(int corePoolSize,
                               int maximumPoolSize,
@@ -1540,11 +1441,7 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
     }
 
     /**
-     * Returns a string identifying this pool, as well as its state,
-     * including indications of run state and estimated worker and
-     * task counts.
-     *
-     * @return a string identifying this pool, as well as its state
+     * 线程池用字符串及表示
      */
     public String toString() {
         long ncompleted;
@@ -1579,74 +1476,17 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
     /* Extension hooks */
 
     /**
-     * Method invoked prior to executing the given Runnable in the
-     * given thread.  This method is invoked by thread {@code t} that
-     * will execute task {@code r}, and may be used to re-initialize
-     * ThreadLocals, or to perform logging.
-     *
-     * <p>This implementation does nothing, but may be customized in
-     * subclasses. Note: To properly nest multiple overridings, subclasses
-     * should generally invoke {@code super.beforeExecute} at the end of
-     * this method.
-     *
-     * @param t the thread that will run task {@code r}
-     * @param r the task that will be executed
+     * 模板方法给子类实现，执行任务前的操作
      */
     protected void beforeExecute(Thread t, Runnable r) { }
 
     /**
-     * Method invoked upon completion of execution of the given Runnable.
-     * This method is invoked by the thread that executed the task. If
-     * non-null, the Throwable is the uncaught {@code RuntimeException}
-     * or {@code Error} that caused execution to terminate abruptly.
-     *
-     * <p>This implementation does nothing, but may be customized in
-     * subclasses. Note: To properly nest multiple overridings, subclasses
-     * should generally invoke {@code super.afterExecute} at the
-     * beginning of this method.
-     *
-     * <p><b>Note:</b> When actions are enclosed in tasks (such as
-     * {@link FutureTask}) either explicitly or via methods such as
-     * {@code submit}, these task objects catch and maintain
-     * computational exceptions, and so they do not cause abrupt
-     * termination, and the internal exceptions are <em>not</em>
-     * passed to this method. If you would like to trap both kinds of
-     * failures in this method, you can further probe for such cases,
-     * as in this sample subclass that prints either the direct cause
-     * or the underlying exception if a task has been aborted:
-     *
-     *  <pre> {@code
-     * class ExtendedExecutor extends ThreadPoolExecutor {
-     *   // ...
-     *   protected void afterExecute(Runnable r, Throwable t) {
-     *     super.afterExecute(r, t);
-     *     if (t == null && r instanceof Future<?>) {
-     *       try {
-     *         Object result = ((Future<?>) r).get();
-     *       } catch (CancellationException ce) {
-     *           t = ce;
-     *       } catch (ExecutionException ee) {
-     *           t = ee.getCause();
-     *       } catch (InterruptedException ie) {
-     *           Thread.currentThread().interrupt(); // ignore/reset
-     *       }
-     *     }
-     *     if (t != null)
-     *       System.out.println(t);
-     *   }
-     * }}</pre>
-     *
-     * @param r the runnable that has completed
-     * @param t the exception that caused termination, or null if
-     * execution completed normally
+     * 模板方法给子类实现，执行任务后的操作
      */
     protected void afterExecute(Runnable r, Throwable t) { }
 
     /**
-     * Method invoked when the Executor has terminated.  Default
-     * implementation does nothing. Note: To properly nest multiple
-     * overridings, subclasses should generally invoke
-     * {@code super.terminated} within this method.
+     * 模板方法给子类实现，线程池状态从TIDYING到TERMINATED需要做的清理动作
      */
     protected void terminated() { }
 
