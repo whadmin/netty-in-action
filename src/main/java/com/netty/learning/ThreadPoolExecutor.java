@@ -99,6 +99,9 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
     private static int workerCountOf(int c)  { return c & CAPACITY; }
 
 
+    /**
+     * 即根据线程池的状态和worker数量合并成整形 ctl
+     */
     private static int ctlOf(int rs, int wc) { return rs | wc; }
 
 
@@ -318,16 +321,10 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
         }
     }
 
-    /*
-     * Methods for setting control state
-     */
+
 
     /**
-     * Transitions runState to given target, or leaves it alone if
-     * already at least the given target.
-     *
-     * @param targetState the desired state, either SHUTDOWN or STOP
-     *        (but not TIDYING or TERMINATED -- use tryTerminate for that)
+     * CAS+循环设置线程池状态为shutdown
      */
     private void advanceRunState(int targetState) {
         for (;;) {
@@ -358,6 +355,11 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
                 return;
 
             /** 线程池workQueue不为空 return，并中断workQueue其中一个work**/
+
+            /**
+             * 线程池为stop状态，且还存在work,中断唤醒一个正在等任务的空闲worker，
+             * 再次调用getTask(),线程池状态发生改变，返回null,work工作线程退出循环
+             */
             if (workerCountOf(c) != 0) { // Eligible to terminate
                 interruptIdleWorkers(ONLY_ONE);
                 return;
@@ -393,12 +395,7 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
      */
 
     /**
-     * If there is a security manager, makes sure caller has
-     * permission to shut down threads in general (see shutdownPerm).
-     * If this passes, additionally makes sure the caller is allowed
-     * to interrupt each worker thread. This might not be true even if
-     * first check passed, if the SecurityManager treats some threads
-     * specially.
+     * 检查调用者是否有权限shutdown线程池
      */
     private void checkShutdownAccess() {
         SecurityManager security = System.getSecurityManager();
@@ -431,32 +428,23 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
     }
 
     /**
-     * Interrupts threads that might be waiting for tasks (as
-     * indicated by not being locked) so they can check for
-     * termination or configuration changes. Ignores
-     * SecurityExceptions (in which case some threads may remain
-     * uninterrupted).
-     *
-     * @param onlyOne If true, interrupt at most one worker. This is
-     * called only from tryTerminate when termination is otherwise
-     * enabled but there are still other workers.  In this case, at
-     * most one waiting worker is interrupted to propagate shutdown
-     * signals in case all threads are currently waiting.
-     * Interrupting any arbitrary thread ensures that newly arriving
-     * workers since shutdown began will also eventually exit.
-     * To guarantee eventual termination, it suffices to always
-     * interrupt only one idle worker, but shutdown() interrupts all
-     * idle workers so that redundant workers exit promptly, not
-     * waiting for a straggler task to finish.
+     * 找到断线程池中空闲的work，中断其工作线程
+     * onlyOne=true 表示仅仅中断一个空闲的work
+     * onlyOne=false 表示中断所有空闲的work
      */
     private void interruptIdleWorkers(boolean onlyOne) {
+        /** 获取主锁：mainLock **/
         final ReentrantLock mainLock = this.mainLock;
+        /** 获取锁 **/
         mainLock.lock();
         try {
+            /** 遍历所有work **/
             for (Worker w : workers) {
                 Thread t = w.thread;
+                /** 判断work工作线程是否没有被中断，且能获取独占同步状态（空闲） **/
                 if (!t.isInterrupted() && w.tryLock()) {
                     try {
+                        /**  中断work工作线程 **/
                         t.interrupt();
                     } catch (SecurityException ignore) {
                     } finally {
@@ -467,13 +455,13 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
                     break;
             }
         } finally {
+            /** 释放锁 **/
             mainLock.unlock();
         }
     }
 
     /**
-     * Common form of interruptIdleWorkers, to avoid having to
-     * remember what the boolean argument means.
+     * 找到断线程池中空闲的work，中断其工作线程
      */
     private void interruptIdleWorkers() {
         interruptIdleWorkers(false);
@@ -481,23 +469,17 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
 
     private static final boolean ONLY_ONE = true;
 
-    /*
-     * Misc utilities, most of which are also exported to
-     * ScheduledThreadPoolExecutor
-     */
+
 
     /**
-     * Invokes the rejected execution handler for the given command.
-     * Package-protected for use by ScheduledThreadPoolExecutor.
+     * 调用handler拒绝策略
      */
     final void reject(Runnable command) {
-        //handler.rejectedExecution(command, this);
+        handler.rejectedExecution(command, this);
     }
 
     /**
-     * Performs any further cleanup following run state transition on
-     * invocation of shutdown.  A no-op here, but used by
-     * ScheduledThreadPoolExecutor to cancel delayed tasks.
+     * 调用shutdown时运行状态转换后执行最后一步的清理模板方法
      */
     void onShutdown() {
     }
@@ -514,15 +496,14 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
     }
 
     /**
-     * Drains the task queue into a new list, normally using
-     * drainTo. But if the queue is a DelayQueue or any other kind of
-     * queue for which poll or drainTo may fail to remove some
-     * elements, it deletes them one by one.
+     * 将workQueue中的元素放入一个List并返回
      */
     private List<Runnable> drainQueue() {
         BlockingQueue<Runnable> q = workQueue;
         ArrayList<Runnable> taskList = new ArrayList<Runnable>();
+        /** 将队列中的值全部从队列中移除，并赋值给对应集合 **/
         q.drainTo(taskList);
+        /** 并发在判断 workQueue是否为空，将新添加加入到taskList**/
         if (!q.isEmpty()) {
             for (Runnable r : q.toArray(new Runnable[0])) {
                 if (q.remove(r))
@@ -623,6 +604,7 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
             }
         } finally {
             if (! workerStarted)
+                /** 失败创建work只能当前线程池状态不是运行状态 **/
                 addWorkerFailed(w);
         }
         return workerStarted;
@@ -652,14 +634,16 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
 
     /**
      * 执行work销毁退出操作
-     *
-     * completedAbruptly 肯定为false 不知道为什么这么写
+     * work 要结束的worker
+     * completedAbruptly 表示是否需要对work数量-1操作
+     *  runWorker 正常执行时 completedAbruptly 为false
+     *  runWorker 执行出现异常 completedAbruptly 为true
      */
     private void processWorkerExit(Worker w, boolean completedAbruptly) {
         if (completedAbruptly) // If abrupt, then workerCount wasn't adjusted
             decrementWorkerCount();
 
-        /** work从线程池中删除 **/
+        /** 从workers 集合中移除worker **/
         final ReentrantLock mainLock = this.mainLock;
         mainLock.lock();
         try {
@@ -675,13 +659,19 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
         int c = ctl.get();
         /**  **/
         if (runStateLessThan(c, STOP)) {
+            /** 如果 work正常退出，需要判断当前线程数量 < 要维护的线程数量 如果是addWorker()添加一个非核心work **/
             if (!completedAbruptly) {
+                /**
+                 * 如果允许回收核心线程，且workQueue还存在需要处理任务 work线程需要大于1
+                 * 如果不允许回收核心线程，则work线程需要大于corePoolSize
+                 * **/
                 int min = allowCoreThreadTimeOut ? 0 : corePoolSize;
                 if (min == 0 && ! workQueue.isEmpty())
                     min = 1;
                 if (workerCountOf(c) >= min)
                     return; // replacement not needed
             }
+            /** 如果 work 是异常退出  addWorker() 添加一个非核心work**/
             addWorker(null, false);
         }
     }
@@ -689,7 +679,6 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
     /**
      * 从WorkQueue获取任务
      * 同时用来判断work何时退出销毁
-     *
      */
     private Runnable getTask() {
         boolean timedOut = false; // Did the last poll() time out?
@@ -732,6 +721,7 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
                  * 设置timedOut = true 进入第二次循环销毁
                  *
                  * 如果没开启work淘汰机制超时获取任务，调用take阻塞获取任务
+                 * 【这里的阻塞都能被中断响应！！】
                  **/
                 Runnable r = timed ?
                         workQueue.poll(keepAliveTime, TimeUnit.NANOSECONDS) :
@@ -945,59 +935,53 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
     }
 
     /**
-     * Initiates an orderly shutdown in which previously submitted
-     * tasks are executed, but no new tasks will be accepted.
-     * Invocation has no additional effect if already shut down.
-     *
-     * <p>This method does not wait for previously submitted tasks to
-     * complete execution.  Use {@link #awaitTermination awaitTermination}
-     * to do that.
-     *
-     * @throws SecurityException {@inheritDoc}
+     * 温柔的终止线程池
      */
     public void shutdown() {
+        /** 获取主锁：mainLock **/
         final ReentrantLock mainLock = this.mainLock;
+        /** 加锁 **/
         mainLock.lock();
         try {
+            /** 判断调用者是否有权限shutdown线程池 **/
             checkShutdownAccess();
+            /** CAS+循环设置线程池状态为shutdown  **/
             advanceRunState(SHUTDOWN);
+            /** 找到断线程池中空闲的work，中断其工作线程   **/
             interruptIdleWorkers();
             onShutdown(); // hook for ScheduledThreadPoolExecutor
         } finally {
+            /** 释放锁 **/
             mainLock.unlock();
         }
+        /** 尝试将线程池状态设置为Terminate **/
         tryTerminate();
     }
 
     /**
-     * Attempts to stop all actively executing tasks, halts the
-     * processing of waiting tasks, and returns a list of the tasks
-     * that were awaiting execution. These tasks are drained (removed)
-     * from the task queue upon return from this method.
-     *
-     * <p>This method does not wait for actively executing tasks to
-     * terminate.  Use {@link #awaitTermination awaitTermination} to
-     * do that.
-     *
-     * <p>There are no guarantees beyond best-effort attempts to stop
-     * processing actively executing tasks.  This implementation
-     * cancels tasks via {@link Thread#interrupt}, so any task that
-     * fails to respond to interrupts may never terminate.
-     *
-     * @throws SecurityException {@inheritDoc}
+     * 强硬的终止线程池
+     * 返回在队列中没有执行的任务
      */
     public List<Runnable> shutdownNow() {
+
         List<Runnable> tasks;
+        /** 获取主锁：mainLock **/
         final ReentrantLock mainLock = this.mainLock;
+        /** 加锁 **/
         mainLock.lock();
         try {
+            /** 判断调用者是否有权限shutdown线程池 **/
             checkShutdownAccess();
+            /** CAS+循环设置线程池状态为shutdown  **/
             advanceRunState(STOP);
+            /** 找到断线程池中空闲的work，中断其工作线程   **/
             interruptWorkers();
             tasks = drainQueue();
         } finally {
+            /** 释放锁 **/
             mainLock.unlock();
         }
+        /** 尝试将线程池状态设置为Terminate **/
         tryTerminate();
         return tasks;
     }
@@ -1128,22 +1112,14 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
     }
 
     /**
-     * Returns the core number of threads.
-     *
-     * @return the core number of threads
-     * @see #setCorePoolSize
+     * 返回线程池中核心work线程的数量。
      */
     public int getCorePoolSize() {
         return corePoolSize;
     }
 
     /**
-     * Starts a core thread, causing it to idly wait for work. This
-     * overrides the default policy of starting core threads only when
-     * new tasks are executed. This method will return {@code false}
-     * if all core threads have already been started.
-     *
-     * @return {@code true} if a thread was started
+     * 如果线程池中work线程数量小于corePoolSize，添加一个核心work
      */
     public boolean prestartCoreThread() {
         return workerCountOf(ctl.get()) < corePoolSize &&
