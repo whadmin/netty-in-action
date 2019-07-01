@@ -688,7 +688,7 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
 
     /**
      * 从WorkQueue获取任务
-     * 同时用来判断work何时推出销毁
+     * 同时用来判断work何时退出销毁
      */
     private Runnable getTask() {
         boolean timedOut = false; // Did the last poll() time out?
@@ -726,6 +726,12 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
             }
 
             try {
+                /**
+                 * 如果开启work淘汰机制超时获取任务，调用poll阻塞获取任务，存在超时，如果超时没有获取到任务
+                 * 设置timedOut = true 进入第二次循环销毁
+                 *
+                 * 如果没开启work淘汰机制超时获取任务，调用take阻塞获取任务
+                 **/
                 Runnable r = timed ?
                         workQueue.poll(keepAliveTime, TimeUnit.NANOSECONDS) :
                         workQueue.take();
