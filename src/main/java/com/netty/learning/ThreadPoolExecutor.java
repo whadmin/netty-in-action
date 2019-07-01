@@ -651,22 +651,15 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
     }
 
     /**
-     * Performs cleanup and bookkeeping for a dying worker. Called
-     * only from worker threads. Unless completedAbruptly is set,
-     * assumes that workerCount has already been adjusted to account
-     * for exit.  This method removes thread from worker set, and
-     * possibly terminates the pool or replaces the worker if either
-     * it exited due to user task exception or if fewer than
-     * corePoolSize workers are running or queue is non-empty but
-     * there are no workers.
+     * 执行work销毁退出操作
      *
-     * @param w the worker
-     * @param completedAbruptly if the worker died due to user exception
+     * completedAbruptly 肯定为false 不知道为什么这么写
      */
     private void processWorkerExit(Worker w, boolean completedAbruptly) {
         if (completedAbruptly) // If abrupt, then workerCount wasn't adjusted
             decrementWorkerCount();
 
+        /** work从线程池中删除 **/
         final ReentrantLock mainLock = this.mainLock;
         mainLock.lock();
         try {
@@ -676,9 +669,11 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
             mainLock.unlock();
         }
 
+        /** 尝试将线程池状态设置为Terminate **/
         tryTerminate();
 
         int c = ctl.get();
+        /**  **/
         if (runStateLessThan(c, STOP)) {
             if (!completedAbruptly) {
                 int min = allowCoreThreadTimeOut ? 0 : corePoolSize;
@@ -693,25 +688,36 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
 
     /**
      * 从WorkQueue获取任务
+     * 同时用来判断work何时推出销毁
      */
     private Runnable getTask() {
         boolean timedOut = false; // Did the last poll() time out?
 
+        /** 无限循环，
+         *  当work超过指定时间没有获取时，设置timedOut = true进行二次遍历时销毁当前work **/
         for (;;) {
             int c = ctl.get();
             int rs = runStateOf(c);
 
-            // Check if queue empty only if necessary.
+            /** 线程池中状态 >= STOP 或者 线程池状态 == SHUTDOWN且阻塞队列为空，则停止worker - 1，return null **/
             if (rs >= SHUTDOWN && (rs >= STOP || workQueue.isEmpty())) {
                 decrementWorkerCount();
                 return null;
             }
 
+            /** 获取work数量 **/
             int wc = workerCountOf(c);
 
-            // Are workers subject to culling?
+            /**  判断是否需要开启work淘汰机制 **/
             boolean timed = allowCoreThreadTimeOut || wc > corePoolSize;
 
+
+            /**
+             * 以下几种情况直接销毁当前work
+             *
+             * 超时没有获取任务timedOut=tue,for循环遍历第二次时
+             * 当前任务超过maximumPoolSize
+             * **/
             if ((wc > maximumPoolSize || (timed && timedOut))
                     && (wc > 1 || workQueue.isEmpty())) {
                 if (compareAndDecrementWorkerCount(c))
@@ -734,7 +740,9 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
 
 
     /**
-     * work执行逻辑
+     * work执行逻辑。
+     * 内部存在一个for循环，不断循环获取任务执行。当线程池状态还在运行，work线程会一直运行不会推出循环
+     * getTask()线程返回null时退出，一般可能当前work超时被销毁或线程池不在运行。
      * @param w
      */
     final void runWorker(Worker w) {
@@ -748,7 +756,10 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
         w.unlock(); // allow interrupts
         boolean completedAbruptly = true;
         try {
-            /** 如果当前work中存在任务则执行，不存在则从WorkQueue获取任务 **/
+            /**
+             * 如果当前work中存在任务则执行，不存在则从WorkQueue获取任务
+             * getTask()！=null 时work永远不停止
+             *  **/
             while (task != null || (task = getTask()) != null) {
                 /** 获取work独占同步状态 **/
                 w.lock();
