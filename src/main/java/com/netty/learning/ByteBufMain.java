@@ -5,12 +5,12 @@ import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.buffer.UnpooledByteBufAllocator;
 
-import org.junit.Test;
+//import org.junit.Test;
 
 
 public class ByteBufMain {
 	
-	@Test
+	//@Test
 	public void create(){
 		//创建一个基于非对象池的
 		System.out.println(UnpooledByteBufAllocator.DEFAULT.buffer());
@@ -18,7 +18,7 @@ public class ByteBufMain {
 		System.out.println(PooledByteBufAllocator.DEFAULT.buffer());
 	}
 	
-	@Test
+	//@Test
 	public void put(){
 		ByteBuf buf=UnpooledByteBufAllocator.DEFAULT.buffer();
 		buf.writeByte(1);
